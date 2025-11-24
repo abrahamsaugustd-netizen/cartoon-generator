@@ -92,19 +92,25 @@
                 </div>
             </div>
 
-            <!-- Action Button & Status -->
-            <div class="flex flex-col sm:flex-row items-center justify-between pt-4 space-y-4 sm:space-y-0">
-                <button id="cartoonize-btn" onclick="cartoonizeImage()"
-                    class="btn-primary text-white font-bold py-3 px-8 rounded-full shadow-lg w-full sm:w-auto disabled:opacity-50 flex items-center justify-center"
-                    disabled>
-                    <svg id="loading-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>2. Generate Cartoon</span>
-                </button>
-
-                <div id="status-message" class="text-sm text-gray-600"></div>
+            <!-- Action Buttons & Status -->
+            <div class="pt-4 space-y-4">
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <button id="cartoonize-btn" onclick="cartoonizeImage()"
+                        class="btn-primary text-white font-bold py-3 px-8 rounded-full shadow-lg w-full sm:w-auto disabled:opacity-50 flex items-center justify-center flex-grow sm:flex-grow-0"
+                        disabled>
+                        <svg id="loading-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>2. Generate Cartoon</span>
+                    </button>
+                    <button id="export-btn" onclick="exportImage()"
+                        class="bg-gray-500 text-white font-bold py-3 px-8 rounded-full shadow-lg w-full sm:w-auto hover:bg-gray-600 transition disabled:opacity-50 flex items-center justify-center flex-grow sm:flex-grow-0"
+                        disabled>
+                        ⬇️ Export Cartoon
+                    </button>
+                </div>
+                <div id="status-message" class="text-sm text-gray-600 text-center sm:text-left pt-2"></div>
             </div>
 
         </div>
@@ -112,17 +118,22 @@
 
     <script type="module">
         // Global environment variables provided by the Canvas environment (not used for persistence here, but kept for context).
+        // NOTE: The API key and Firebase config are ignored in the Vercel deployment setup.
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         // API Configuration
         const TEXT_MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
-        const IMAGE_MODEL_NAME = "gemini-2.5-flash-image-preview";
-        const apiKey = ""; // Canvas provides this at runtime
+        
+        // --- IMPORTANT CHANGE ---
+        // 1. The image generation API call now points to the Vercel Serverless Function endpoint.
+        // 2. The text generation API still points to Gemini directly (it's less sensitive, but ideally should also be proxied).
+        const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL_NAME}:generateContent?key=`; // Key is now omitted here
+        const imageApiUrl = '/api/cartoon'; // <-- NEW SECURE ENDPOINT
 
-        const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL_NAME}:generateContent?key=${apiKey}`;
-        const imageApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL_NAME}:generateContent?key=${apiKey}`;
+        // Removed apiKey declaration as it is no longer needed on the frontend.
+        // const apiKey = ""; 
 
         // UI Element References
         const fileInput = document.getElementById('photo-upload');
@@ -131,8 +142,8 @@
         const cartoonResult = document.getElementById('cartoon-result');
         const resultPlaceholder = document.getElementById('result-placeholder');
         const cartoonizeBtn = document.getElementById('cartoonize-btn');
-        const statusMessage = document.getElementById('status-message');
         const loadingSpinner = document.getElementById('loading-spinner');
+        const statusMessage = document.getElementById('status-message');
         
         // New LLM Feature UI Elements
         const styleInput = document.getElementById('style-input');
@@ -141,6 +152,8 @@
         const expandedPromptOutput = document.getElementById('expanded-prompt-output');
         const promptStatusMessage = document.getElementById('prompt-status-message');
 
+        // New Export Feature UI Elements
+        const exportBtn = document.getElementById('export-btn');
 
         let imageBase64 = null;
         
@@ -159,6 +172,7 @@
                 originalPreview.classList.add('hidden');
                 originalPlaceholder.classList.remove('hidden');
                 cartoonizeBtn.disabled = true;
+                exportBtn.disabled = true;
                 return;
             }
 
@@ -172,6 +186,7 @@
                 // Store Base64 data for API (remove the data:mime/type;base64, prefix)
                 imageBase64 = e.target.result.split(',')[1];
                 cartoonizeBtn.disabled = false;
+                exportBtn.disabled = true; // Disable export until new image is generated
                 statusMessage.textContent = 'Image loaded. Ready to cartoonize.';
                 
                 // Clear previous result
@@ -184,6 +199,8 @@
         
         /**
          * LLM Function: Expands a user's short style description into a detailed prompt.
+         * NOTE: This function still calls the Gemini API directly. For maximum security, 
+         * this should also be proxied, but for simplicity, we are focusing on the image model first.
          */
         window.expandPrompt = async () => {
             const userStyle = styleInput.value.trim();
@@ -191,6 +208,16 @@
                 promptStatusMessage.textContent = 'Please enter a brief style description (e.g., "watercolor sketch").';
                 return;
             }
+
+            // --- IMPORTANT: The direct call to the text API will only work if you insert your key here! ---
+            // If you want to use the text prompt generator publicly, you must insert your key or proxy this call as well.
+            const PUBLIC_TEXT_API_KEY = ""; // <--- INSERT YOUR GEMINI API KEY HERE FOR PROMPT GENERATION
+            if (!PUBLIC_TEXT_API_KEY && !initialAuthToken) {
+                 promptStatusMessage.textContent = 'Text Prompt Generator disabled: API Key is missing. Please insert it in the code.';
+                 return;
+            }
+            const finalTextApiUrl = `${textApiUrl}${PUBLIC_TEXT_API_KEY || initialAuthToken}`;
+            // ---------------------------------------------------------------------------------------------
 
             expandPromptBtn.disabled = true;
             promptSpinner.classList.remove('hidden');
@@ -213,7 +240,7 @@
 
             while (attempt < MAX_RETRIES) {
                 try {
-                    const response = await fetch(textApiUrl, {
+                    const response = await fetch(finalTextApiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -270,7 +297,7 @@
 
 
         /**
-         * Image Generation Function: Uses the photo and the expanded prompt to generate the cartoon.
+         * Image Generation Function: Now calls the SECURE Vercel Serverless Proxy.
          */
         window.cartoonizeImage = async () => {
             if (!imageBase64) {
@@ -286,10 +313,12 @@
             }
 
             cartoonizeBtn.disabled = true;
+            exportBtn.disabled = true; // Disable export while generating
             loadingSpinner.classList.remove('hidden');
             statusMessage.textContent = 'Generating cartoon... this may take a moment.';
             resultPlaceholder.textContent = 'Processing...';
             
+            // Build the payload exactly as the Gemini API expects it
             const payload = {
                 contents: [
                     {
@@ -314,7 +343,8 @@
 
             while (attempt < MAX_RETRIES) {
                 try {
-                    const response = await fetch(imageApiUrl, { // Using imageApiUrl
+                    // *** CALLING THE VERCEL PROXY ENDPOINT ***
+                    const response = await fetch(imageApiUrl, { 
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -329,9 +359,11 @@
                     }
 
                     if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                        const errorData = await response.json();
+                        throw new Error(`HTTP error! status: ${response.status}. Details: ${errorData.details || errorData.error}`);
                     }
 
+                    // Response from the Vercel Proxy (which contains the Gemini result)
                     const result = await response.json();
                     const base64Data = result?.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
 
@@ -343,7 +375,7 @@
                     break;
 
                 } catch (error) {
-                    console.error('Image API call failed on attempt', attempt + 1, ':', error);
+                    console.error('Image Generation call failed on attempt', attempt + 1, ':', error);
                     if (attempt < MAX_RETRIES - 1) {
                         attempt++;
                         const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
@@ -363,14 +395,43 @@
                 cartoonResult.src = imageUrl;
                 cartoonResult.classList.remove('hidden');
                 resultPlaceholder.classList.add('hidden');
-                statusMessage.textContent = 'Cartoon generated successfully!';
+                statusMessage.textContent = 'Cartoon generated successfully! Click "Export" to save it.';
+                exportBtn.disabled = false; // Enable export on success
             } else {
                  statusMessage.textContent = 'Error: Generation failed after all retries.';
                  resultPlaceholder.textContent = 'Generation failed.';
+                 exportBtn.disabled = true;
             }
 
             cartoonizeBtn.disabled = false;
             loadingSpinner.classList.add('hidden');
+        };
+
+        /**
+         * Export Function: Downloads the generated image using the data URL.
+         */
+        window.exportImage = () => {
+            const imageUrl = cartoonResult.src;
+            if (!imageUrl || cartoonResult.classList.contains('hidden')) {
+                statusMessage.textContent = 'Nothing to export. Please generate a cartoon first.';
+                return;
+            }
+
+            // Create a temporary link element
+            const link = document.createElement('a');
+            
+            // Set the data URL as the href
+            link.href = imageUrl;
+            
+            // Set the filename for download
+            link.download = 'cartoon-transformer-' + Date.now() + '.png';
+            
+            // Append to body, click it, and remove it to trigger download
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            statusMessage.textContent = 'Exporting cartoon... Saved successfully!';
         };
 
     </script>
